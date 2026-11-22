@@ -244,7 +244,7 @@ const EMOTES = ['agree', 'angry', 'atease', 'attention', 'blah', 'bored', 'bow',
 const DANGER = new Set(['v_eject', 'v_emergency_exit', 'v_self_destruct']);
 // [action, label, state key (lights the button), behaviour]
 const GROUPS = [
-  { name: 'Player', items: [['mobiglas', 'mobiGlas'], ['toggle_flashlight', 'Flashlight'], ['v_starmap', 'Starmap'], ['visor_wipe', 'Visor wipe']] },
+  { name: 'Player', foot: true, items: [['mobiglas', 'mobiGlas'], ['toggle_flashlight', 'Flashlight'], ['v_starmap', 'Starmap'], ['visor_wipe', 'Visor wipe']] },
   { name: 'Ship', ship: true, items: [['v_flightready', 'Flight ready'], ['v_lights', 'Lights', 'lights'], ['v_open_all_doors', 'Open doors'], ['v_close_all_doors', 'Close doors'], ['v_lock_all_doors', 'Lock doors'], ['v_unlock_all_doors', 'Unlock doors'], ['v_lock_all_ports', 'Lock ports'], ['v_unlock_all_ports', 'Unlock ports']] },
   { name: 'Power', ship: true, items: [['v_power_toggle', 'Ship power', 'pp'], ['v_power_toggle_thrusters', 'Thrusters', 'eng'], ['v_power_toggle_shields', 'Shields', 'shd'], ['v_power_toggle_weapons', 'Weapons', 'wpn']] },
   { name: 'Flight', ship: true, items: [['v_toggle_landing_system', 'Landing gear', 'gear'], ['v_vtol_toggle', 'VTOL', 'vtol'], ['v_ifcs_vector_decoupling_toggle', 'Decoupled', 'decoupled'], ['v_ifcs_toggle_gforce_safety', 'G-safe', 'gsafe'], ['v_ifcs_proximity_assist_toggle', 'Prox assist', 'prox'], ['v_ifcs_toggle_esp', 'ESP', 'esp'], ['v_flight_advanced_hud_toggle', 'Adv. HUD', 'advhud'], ['v_transform_cycle', 'Transform'], ['v_ifcs_reset_gmeter_max', 'Reset G max']] },
@@ -278,21 +278,24 @@ function buildControls() {
     el.innerHTML = `<details open><summary>Search results <small>${hits.length}</small></summary><div class="btns">${hits.map(a =>
       button([a.action_name, a.action_name.replace(/^v_|^emote_/, '').replace(/_/g, ' '), null, DANGER.has(a.action_name) ? 'confirm' : (a.holdable ? 'hold' : '')], DANGER.has(a.action_name))).join('')}</div></details>`;
   } else {
-    el.innerHTML = GROUPS.map((g, i) => `<details data-group="${i}" ${g.closed ? '' : 'open'} class="${g.danger ? 'danger' : ''}"><summary>${g.name} <small>${g.ship ? 'in ship' : 'always'}</small></summary><div class="btns ${g.small ? 'small' : ''}">${g.items.map(it => button(it, g.danger)).join('')}</div>${g.hint ? `<div class="hint">${g.hint}</div>` : ''}</details>`).join('');
+    el.innerHTML = GROUPS.map((g, i) => `<details data-group="${i}" ${g.closed ? '' : 'open'} class="${g.danger ? 'danger' : ''}"><summary>${g.name} <small>${g.ship ? 'in ship' : g.foot ? 'on foot' : 'always'}</small></summary><div class="btns ${g.small ? 'small' : ''}">${g.items.map(it => button(it, g.danger)).join('')}</div>${g.hint ? `<div class="hint">${g.hint}</div>` : ''}</details>`).join('');
   }
   refreshControls();
 }
 function refreshControls() {
-  const inShip = state.actor?.state?.locomotion === 'ACTOR_LOCOMOTION_STATE_SEATED' && !!state.vehicle;
+  const seated = state.actor?.state?.locomotion === 'ACTOR_LOCOMOTION_STATE_SEATED';
+  const inShip = seated && !!state.vehicle;
   document.querySelectorAll('#groups details[data-group]').forEach(d => {
-    const g = GROUPS[d.dataset.group], inactive = !connected || (!!g.ship && !inShip);
-    d.classList.toggle('inactive', inactive);
-    d.querySelectorAll('.act').forEach(b => { b.disabled = !connected; b.title = !connected ? 'Game not connected' : (inactive ? 'Usually only works while seated in a ship' : b.dataset.action); });
+    const g = GROUPS[d.dataset.group];
+    const why = !connected ? 'Game not connected' : (g.ship && !inShip) ? 'Usually only works while seated in a ship'
+      : (g.foot && seated) ? 'The game does not accept these while seated' : '';
+    d.classList.toggle('inactive', !!why);
+    d.querySelectorAll('.act').forEach(b => { b.disabled = !connected; b.title = why || b.dataset.action; });
   });
   if (!connected) document.querySelectorAll('#groups .act').forEach(b => { b.disabled = true; });
   document.querySelectorAll('#groups .act[data-key]').forEach(b => b.classList.toggle('active', !!(b.dataset.key && stateOf(b.dataset.key))));
   document.getElementById('ctx').innerHTML = !connected ? 'Game not connected: controls are disabled.' :
-    inShip ? `Seated as <b>${en(state.actor.state.crew_role, 'ACTOR_CREW_ROLE_')}</b> in <b>${esc(state.vehicle.state.name)}</b>. Lit buttons show what is on.` :
+    inShip ? `Seated as <b>${en(state.actor.state.crew_role, 'ACTOR_CREW_ROLE_')}</b> in <b>${esc(state.vehicle.state.name)}</b>. Lit buttons show what is on. Player controls are dimmed: the game does not accept them while seated.` :
     'On foot: ship controls are dimmed (the game may refuse them).';
 }
 
@@ -300,10 +303,25 @@ function toast(text, cls = '') {
   const t = document.createElement('div'); t.className = 'toast ' + cls; t.textContent = text;
   document.getElementById('toasts').append(t); setTimeout(() => t.remove(), 3500);
 }
+// The game's answer to TriggerGameAction, in plain words
+function explain(status) {
+  const seated = state.actor?.state?.locomotion === 'ACTOR_LOCOMOTION_STATE_SEATED';
+  return {
+    OK: 'done',
+    MAP_INACTIVE: seated ? 'not available while seated' : 'not available on foot',
+    RATE_LIMITED: 'too many presses, wait a moment',
+    HOLD_NOT_ALLOWED: 'this action cannot be held',
+    FILTERED: 'blocked by the game',
+    UNKNOWN_ACTION: 'not known to this game version',
+    FAILED: 'the game could not do it',
+    UNREACHABLE: 'game not reachable',
+  }[status] || 'unexpected answer';
+}
 async function send(action, holdMs) {
   if (!api) return;
   const r = await api.trigger(action, holdMs ?? null);
-  toast(`${action}${holdMs ? ` (${holdMs} ms)` : ''} → ${r.status}${r.message ? ': ' + r.message : ''}`, r.status === 'OK' ? '' : 'warn');
+  const what = `${action}${holdMs ? ` (${holdMs} ms)` : ''}`;
+  toast(r.status === 'OK' ? `${what}: done` : `${what}: ${explain(r.status)} (${r.status}${r.message ? ': ' + r.message : ''})`, r.status === 'OK' ? '' : 'warn');
 }
 
 // press handling: click, hold (radar ping), hold-to-confirm (danger)

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SC Telemetry</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #121821; --line: #1f2a37; --text: #d6e2ee; --dim: #6b7d90;
+    --accent: #4cc3ff; --ok: #3ddc84; --warn: #ffb020; --bad: #ff4d4f; --off: #2a3542;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 1; }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .08em; text-transform: uppercase; }
+  .pill { font: 12px var(--mono); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .pill.on { color: var(--ok); border-color: var(--ok); }
+  .pill.offline { color: var(--bad); border-color: var(--bad); }
+  main { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; padding: 12px 16px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; transition: opacity .3s; }
+  section.stale { opacity: .35; }
+  h2 { margin: 0 0 10px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); display: flex; justify-content: space-between; }
+  h2 small { color: var(--dim); letter-spacing: 0; text-transform: none; font-weight: 400; }
+  .kv { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+  .kv span:first-child { color: var(--dim); }
+  .kv span:last-child, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .big { font: 600 22px var(--mono); }
+  .gauge { margin: 6px 0; }
+  .gauge .lbl { display: flex; justify-content: space-between; font-size: 12px; }
+  .gauge .lbl span:first-child { color: var(--dim); }
+  .gauge .bar { height: 6px; background: var(--off); border-radius: 3px; overflow: hidden; margin-top: 2px; }
+  .gauge .bar i { display: block; height: 100%; background: var(--accent); transition: width .15s linear; }
+  .gauge.low .bar i { background: var(--warn); } .gauge.crit .bar i { background: var(--bad); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 6px; }
+  .led { font: 11px var(--mono); text-transform: uppercase; padding: 5px 6px; border-radius: 4px; text-align: center; background: var(--off); color: var(--dim); }
+  .led.on, .led.NOMINAL { background: rgba(61,220,132,.15); color: var(--ok); }
+  .led.MINOR_ON, .led.MINOR_FLASHING { background: rgba(255,176,32,.18); color: var(--warn); }
+  .led.MAJOR_ON, .led.MAJOR_FLASHING { background: rgba(255,77,79,.2); color: var(--bad); }
+  .led.MINOR_FLASHING, .led.MAJOR_FLASHING { animation: blink .6s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: .3; } }
+  .faces { display: flex; gap: 4px; margin-top: 6px; }
+  .faces div { flex: 1; height: 24px; background: var(--off); border-radius: 3px; position: relative; overflow: hidden; }
+  .faces div i { position: absolute; bottom: 0; left: 0; right: 0; background: var(--accent); }
+  ul.log { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; font: 12px var(--mono); }
+  ul.log li { padding: 3px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
+  ul.log li span { color: var(--dim); }
+  .empty { color: var(--dim); font-style: italic; }
+  .sub { color: var(--dim); font-size: 12px; }
+  @media (max-width: 400px) { main { padding: 12px 16px; grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>SC Telemetry</h1>
+  <span id="conn" class="pill">bridge…</span>
+  <span id="rate" class="pill">0 msg/s</span>
+</header>
+<main>
+  <section id="p-actor"><h2>Character</h2><div class="c"></div></section>
+  <section id="p-env"><h2>Environment</h2><div class="c"></div></section>
+  <section id="p-ship"><h2>Ship</h2><div class="c"></div></section>
+  <section id="p-flight"><h2>Flight</h2><div class="c"></div></section>
+  <section id="p-systems"><h2>Systems</h2><div class="c"></div></section>
+  <section id="p-ifcs"><h2>Flight assist</h2><div class="c"></div></section>
+  <section id="p-weapons"><h2>Weapons</h2><div class="c"></div></section>
+  <section id="p-ffb"><h2>Force feedback</h2><div class="c"></div></section>
+  <section id="p-events"><h2>Events <small id="evcount"></small></h2><ul class="log" id="events"><li class="empty">No events yet</li></ul></section>
+</main>
+<script>
+const STALE_MS = 1500;
+const state = {}, seen = {};
+let count = 0, dirty = false;
+
+// ---- formatting helpers ----
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const n = (v, d = 1) => (v ?? 0).toFixed(d);
+const en = (v, prefix) => v ? esc(String(v).replace(prefix, '').replace(/_/g, ' ').toLowerCase()) : '—';
+const kv = (k, v) => `<div class="kv"><span>${k}</span><span>${v}</span></div>`;
+const yes = b => b ? 'yes' : 'no';
+function gauge(label, g, unit = '', d = 0, highIsBad = false) {
+  const cur = g?.current ?? 0, max = g?.max || 0, pct = max ? Math.max(0, Math.min(100, cur / max * 100)) : 0;
+  const cls = highIsBad ? (pct > 85 ? 'crit' : pct > 65 ? 'low' : '') : (pct < 15 ? 'crit' : pct < 35 ? 'low' : '');
+  return `<div class="gauge ${cls}"><div class="lbl"><span>${label}</span><span class="num">${n(cur, d)}${unit} / ${n(max, d)}${unit}</span></div><div class="bar"><i style="width:${pct}%"></i></div></div>`;
+}
+const led = (label, cls) => `<div class="led ${cls}">${label}</div>`;
+const panel = id => document.querySelector(`#p-${id} .c`);
+const setStale = (id, stale) => document.getElementById('p-' + id).classList.toggle('stale', stale);
+
+// ---- renderers ----
+function renderActor(a) {
+  const v = a.vitals || {}, s = a.state || {}, e = a.environment || {};
+  panel('actor').innerHTML =
+    gauge('Health', v.health, '', 1) + gauge('Oxygen', v.oxygen, '', 2) + gauge('Hunger', v.hunger) + gauge('Thirst', v.thirst) +
+    kv('Body temp', n(v.body_temperature?.current, 1) + ' °C') + kv('Heart rate', n(v.heart_rate, 0) + ' bpm') +
+    kv('Intoxication', v.intoxication_level ?? 0) +
+    kv('State', en(s.locomotion, 'ACTOR_LOCOMOTION_STATE_')) + kv('Crew role', en(s.crew_role, 'ACTOR_CREW_ROLE_')) +
+    kv('Seat', esc(s.seat_name) || '—') +
+    `<div class="kv"><span>Balance</span><span class="big">${Number(s.uec_balance ?? 0).toLocaleString()} <span class="sub">aUEC</span></span></div>`;
+  panel('env').innerHTML =
+    kv('Outside temp', n(e.external_temperature, 1) + ' °C') + kv('Radiation', n(e.ambient_radiation_rate, 2)) +
+    kv('Breathable', yes(e.breathable_atmosphere)) + kv('Gravity', n(v.gravity, 2) + ' g') + kv('Pressure', n(v.pressure, 2));
+}
+
+function renderVehicle(st) {
+  const f = st.flight || {}, ins = f.instruments || {}, fs = f.state || {}, set = f.settings || {};
+  const sh = st.shields, mm = st.master_mode;
+  panel('ship').innerHTML =
+    `<div class="big">${esc(st.name) || '—'}</div><div class="sub">${esc(st.manufacturer)} · ${esc(st.class_name)} · ${en(st.type, 'VEHICLE_TYPE_')}</div>` +
+    kv('Hull health', n(st.health, 1)) +
+    (sh ? kv('Shields', n(sh.level, 2)) + `<div class="faces">${(sh.faces || []).map(x => `<div title="${n(x, 2)}"><i style="height:${Math.max(0, Math.min(100, x * 100))}%"></i></div>`).join('')}</div>` : kv('Shields', '—')) +
+    kv('Master mode', mm ? en(mm.mode, 'VEHICLE_MASTER_MODE_') + (mm.spooled ? ' (spooled)' : '') : '—') +
+    kv('Lights', st.lights_enabled ? 'on' : 'off') +
+    kv('Doors', st.doors ? en(st.doors.open_state, 'DOOR_OPEN_STATE_') + ' / ' + en(st.doors.lock_state, 'DOOR_LOCK_STATE_') : '—');
+
+  const b = ins.boost || {};
+  panel('flight').innerHTML =
+    `<div class="kv"><span>Speed</span><span class="big">${n(ins.speed, 0)} <span class="sub">m/s</span></span></div>` +
+    kv('Heading', n(ins.heading, 0) + '°') + kv('Altitude', n(ins.altitude, 0) + ' m') + kv('Radar altitude', n(ins.radar_altitude, 0) + ' m') +
+    kv('Vertical speed', n(ins.vertical_speed_indicator, 1) + ' m/s') + kv('Atmos. density', n(ins.atmospheric_density, 3)) +
+    kv('Hydrogen fuel', n(ins.hydrogen_fuel, 2)) + kv('Quantum fuel', n(ins.quantum_fuel, 2)) +
+    (ins.g_meter ? gauge('G-meter', ins.g_meter, ' g', 1, true) : '') +
+    kv('Boost', `${b.engaged ? 'engaged' : 'off'} · out ${n(b.output, 2)} · res ${n(b.reserves, 2)}${b.critical ? ' · CRITICAL' : ''}`) +
+    kv('Landed', yes(fs.is_landed)) + kv('Gear', en(fs.gear, 'VEHICLE_COMPONENT_DEPLOYMENT_STATE_')) +
+    kv('VTOL', en(fs.vtol, 'VEHICLE_COMPONENT_DEPLOYMENT_STATE_')) + kv('Transform', en(fs.transformation, 'VEHICLE_COMPONENT_DEPLOYMENT_STATE_'));
+
+  const p = st.power || {}, an = st.annunciators || {};
+  const pw = [['powerplants', 'Power plant'], ['engines', 'Engines'], ['weapons', 'Weapons'], ['coolers', 'Coolers'], ['life_support', 'Life sup.'], ['gravity_generators', 'Grav gen'], ['sensors', 'Sensors'], ['shield_generators', 'Shield gen'], ['shield_emitters', 'Shield emit']];
+  const anns = ['pwr', 'wpn', 'thr', 'shld', 'cool', 'qdrv', 'radr', 'prox', 'hit', 'misl'];
+  panel('systems').innerHTML =
+    `<div class="sub">Power</div><div class="grid">${pw.map(([k, l]) => led(l, p[k] ? 'on' : '')).join('')}</div>` +
+    `<div class="sub" style="margin-top:10px">Warning lights</div><div class="grid">${anns.map(k => led(k, String(an[k] || '').replace('ANNUNCIATOR_STATE_', ''))).join('')}</div>`;
+
+  const av = [['ifcs_coupled', 'Coupled'], ['ifcs_esp', 'ESP'], ['ifcs_gravity_compensation', 'Grav comp'], ['ifcs_g_safe', 'G-safe'], ['ifcs_cruise_mode', 'Cruise'], ['ifcs_speed_limiter', 'Speed lim.'], ['ifcs_proximity_assist', 'Prox assist'], ['ifcs_proximity_assist_landing', 'Prox landing'], ['ifcs_stability', 'Stability'], ['ifcs_core', 'Core'], ['ifcs_wind_compensation', 'Wind comp'], ['ifcs_command_behaviour', 'Command']];
+  const fl = [['advanced_hud_enabled_scm', 'Adv HUD SCM'], ['advanced_hud_enabled_nav', 'Adv HUD NAV'], ['advanced_hud_labels', 'HUD labels'], ['course_prediction', 'Course pred.'], ['ifcs_spacebreak_enables_boost', 'Brake→boost'], ['ifcs_g_safe_disabled_by_boost', 'Boost kills G-safe'], ['flight_light_amplification', 'Light amp']];
+  panel('ifcs').innerHTML =
+    `<div class="grid">${av.map(([k, l]) => { const a = set[k] || {}; return led(l, a.active ? 'on' : '') .replace('class="led', `title="${a.enabled ? 'available' : 'unavailable'}" class="led`); }).join('')}</div>` +
+    `<div class="grid" style="margin-top:8px">${fl.map(([k, l]) => led(l, set[k] ? 'on' : '')).join('')}</div>`;
+}
+
+function renderWeapons(w) {
+  const s = w.settings || {};
+  panel('weapons').innerHTML =
+    kv('Preset', `${w.preset_index ?? 0} · ${esc(w.preset_name) || '—'}`) +
+    ((w.weapons || []).length ? (w.weapons).map(x => kv(esc(x.name), `${x.is_powered ? 'pwr' : 'off'} · ${x.ready_to_fire ? 'READY' : 'not ready'}${x.contained_in_preset ? ' · in preset' : ''}`)).join('') : '<div class="empty">No weapons</div>') +
+    (w.countermeasures || []).map(c => kv('CM ' + en(c.type, 'COUNTERMEASURE_TYPE_'), c.amount ?? 0)).join('') +
+    `<div class="grid" style="margin-top:8px">${[['gimbals_locked', 'Gimbal lock'], ['staggered_fire', 'Stagger'], ['precision_lines', 'Precision'], ['use_lag_pips', 'Lag pips'], ['use_single_pips', 'Single pip'], ['use_fading_pips', 'Fade pips'], ['magnified_ui', 'Magnified'], ['fallback_convergence_distance', 'Fallback conv.']].map(([k, l]) => led(l, s[k] ? 'on' : '')).join('')}</div>`;
+}
+
+function renderFfb(f) {
+  const ax = (o, name) => ['x', 'y', 'z'].map(k => kv(`${name} ${k} res / damp`, `${n(o?.[k]?.resistance, 2)} / ${n(o?.[k]?.damping, 2)}`)).join('');
+  panel('ffb').innerHTML = ax(f.angular, 'Angular') + ax(f.linear, 'Linear') + kv('Gunfire', n(f.gunfire, 2)) + kv('Stick shaker', n(f.stick_shaker, 2));
+}
+
+const SECTIONS = { actor: ['actor', 'env'], vehicle: ['ship', 'flight', 'systems', 'ifcs'], weapons: ['weapons'], force_feedback: ['ffb'] };
+const EMPTY = '<div class="empty">No data</div>';
+function render() {
+  dirty = false;
+  const now = Date.now();
+  for (const [k, ids] of Object.entries(SECTIONS)) {
+    const stale = !seen[k] || now - seen[k] > STALE_MS;
+    ids.forEach(id => setStale(id, stale));
+    if (!state[k]) { ids.forEach(id => { if (!panel(id).innerHTML) panel(id).innerHTML = EMPTY; }); continue; }
+  }
+  if (state.actor) renderActor(state.actor);
+  if (state.vehicle) renderVehicle(state.vehicle.state || {});
+  if (state.weapons) renderWeapons(state.weapons);
+  if (state.force_feedback) renderFfb(state.force_feedback);
+}
+
+function addEvents(list) {
+  const ul = document.getElementById('events');
+  if (ul.querySelector('.empty')) ul.innerHTML = '';
+  for (const e of list) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span>${new Date().toLocaleTimeString()}</span>${en(e.type, 'GAME_EVENT_TYPE_')}`;
+    ul.prepend(li);
+  }
+  while (ul.children.length > 100) ul.lastChild.remove();
+  document.getElementById('evcount').textContent = ul.children.length + ' shown';
+}
+
+// ---- data feed ----
+const conn = document.getElementById('conn');
+const es = new EventSource('/events');
+es.addEventListener('status', e => {
+  const { connected } = JSON.parse(e.data);
+  conn.textContent = connected ? 'game connected' : 'waiting for game';
+  conn.className = 'pill ' + (connected ? 'on' : 'offline');
+});
+es.addEventListener('frame', e => {
+  const f = JSON.parse(e.data); count++;
+  for (const k of Object.keys(f)) { if (k === 'events') continue; state[k] = f[k]; seen[k] = Date.now(); }
+  if (f.events?.events?.length) addEvents(f.events.events);
+  if (!dirty) { dirty = true; requestAnimationFrame(render); }
+});
+es.onerror = () => { conn.textContent = 'bridge offline'; conn.className = 'pill offline'; };
+setInterval(() => { document.getElementById('rate').textContent = count + ' msg/s'; count = 0; render(); }, 1000);
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SC Telemetry</title>
+<!-- Shown by app/main.py in a pywebview window. Data arrives through window.onFrame / onStatus / onUpdate;
+     buttons call window.pywebview.api (app/api.py). The layout matches design/mockup.html. -->
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #121821; --panel2: #18202b; --line: #1f2a37; --text: #d6e2ee; --dim: #6b7d90;
+    --accent: #4cc3ff; --ok: #3ddc84; --warn: #ffb020; --bad: #ff4d4f; --off: #2a3542;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, "Segoe UI", sans-serif; display: flex; flex-direction: column; user-select: none; }
+  button { font: inherit; color: inherit; }
+
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex: none; }
+  header h1 { font-size: 15px; margin: 0; letter-spacing: .08em; text-transform: uppercase; }
+  .ver { font: 12px var(--mono); color: var(--dim); }
+  .pill { font: 12px var(--mono); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); background: none; }
+  .pill.on { color: var(--ok); border-color: var(--ok); }
+  .pill.offline { color: var(--bad); border-color: var(--bad); }
+  .pill.wait { color: var(--warn); border-color: var(--warn); }
+  .pill.update { color: var(--accent); border-color: var(--accent); cursor: pointer; }
+  .spacer { flex: 1; }
+  .iconbtn { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; color: var(--dim); }
+  .iconbtn:hover { color: var(--text); }
+
+  .banner { display: none; gap: 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); flex: none; }
+  .banner.show { display: flex; }
+  .banner.warn { background: rgba(255,176,32,.08); }
+  .banner.info { background: rgba(76,195,255,.06); }
+  .banner .msg { flex: 1; }
+  code { font-family: var(--mono); font-size: 12px; background: var(--off); padding: 1px 5px; border-radius: 3px; user-select: text; }
+
+  .layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 380px; min-height: 0; }
+  main { overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; padding: 12px 16px; align-content: start; }
+  aside { border-left: 1px solid var(--line); overflow-y: auto; padding: 12px 14px; background: #0d1219; }
+
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; transition: opacity .3s; }
+  section.stale { opacity: .35; }
+  h2 { margin: 0 0 10px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); display: flex; justify-content: space-between; }
+  h2 small { color: var(--dim); letter-spacing: 0; text-transform: none; font-weight: 400; }
+  .kv { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+  .kv span:first-child { color: var(--dim); }
+  .kv span:last-child { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .big { font: 600 22px var(--mono); }
+  .gauge { margin: 6px 0; }
+  .gauge .lbl { display: flex; justify-content: space-between; font-size: 12px; }
+  .gauge .lbl span:first-child { color: var(--dim); }
+  .gauge .lbl span:last-child { font-family: var(--mono); }
+  .gauge .bar { height: 6px; background: var(--off); border-radius: 3px; overflow: hidden; margin-top: 2px; }
+  .gauge .bar i { display: block; height: 100%; background: var(--accent); }
+  .gauge.low .bar i { background: var(--warn); } .gauge.crit .bar i { background: var(--bad); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 6px; }
+  .led { font: 11px var(--mono); text-transform: uppercase; padding: 5px 6px; border-radius: 4px; text-align: center; background: var(--off); color: var(--dim); }
+  .led.on, .led.NOMINAL { background: rgba(61,220,132,.15); color: var(--ok); }
+  .led.MINOR_ON, .led.MINOR_FLASHING { background: rgba(255,176,32,.18); color: var(--warn); }
+  .led.MAJOR_ON, .led.MAJOR_FLASHING { background: rgba(255,77,79,.2); color: var(--bad); }
+  .led.MINOR_FLASHING, .led.MAJOR_FLASHING { animation: blink .6s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: .3; } }
+  .faces { display: flex; gap: 4px; margin-top: 6px; }
+  .faces div { flex: 1; height: 24px; background: var(--off); border-radius: 3px; position: relative; overflow: hidden; }
+  .faces div i { position: absolute; bottom: 0; left: 0; right: 0; background: var(--accent); }
+  ul.log { list-style: none; margin: 0; padding: 0; max-height: 200px; overflow-y: auto; font: 12px var(--mono); }
+  ul.log li { padding: 3px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
+  ul.log li span { color: var(--dim); }
+  .empty { color: var(--dim); font-style: italic; }
+  .sub { color: var(--dim); font-size: 12px; }
+
+  .ctx { font-size: 12px; color: var(--dim); margin: 2px 0 10px; }
+  .ctx b { color: var(--text); font-weight: 600; }
+  .search { width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; margin-bottom: 10px; }
+  details { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); margin-bottom: 8px; }
+  details.inactive { opacity: .45; }
+  summary { cursor: pointer; padding: 8px 12px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); list-style: none; display: flex; justify-content: space-between; }
+  summary::-webkit-details-marker { display: none; }
+  summary small { color: var(--dim); letter-spacing: 0; text-transform: none; }
+  details.danger summary { color: var(--bad); }
+  .btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 0 10px 10px; }
+  .btns.small { grid-template-columns: repeat(4, 1fr); }
+  .act { position: relative; overflow: hidden; padding: 8px 4px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel2); cursor: pointer; font-size: 12px; text-align: center; }
+  .btns.small .act { padding: 6px 2px; font-size: 11px; }
+  .act:hover:not(:disabled) { border-color: var(--accent); }
+  .act:active:not(:disabled) { transform: translateY(1px); }
+  .act:disabled { cursor: not-allowed; }
+  .act.active { background: rgba(61,220,132,.15); border-color: var(--ok); color: var(--ok); }
+  .act.danger { border-color: rgba(255,77,79,.5); color: var(--bad); }
+  .act .fill { position: absolute; inset: 0; width: 0; background: rgba(255,77,79,.35); }
+  .act .lbl { position: relative; }
+  .hint { font-size: 11px; color: var(--dim); padding: 0 12px 10px; }
+
+  #toasts { position: fixed; right: 396px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; z-index: 5; }
+  .toast { background: var(--panel2); border: 1px solid var(--line); border-left: 3px solid var(--ok); padding: 6px 10px; border-radius: 6px; font: 12px var(--mono); max-width: 520px; }
+  .toast.bad { border-left-color: var(--bad); } .toast.warn { border-left-color: var(--warn); }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; align-items: center; justify-content: center; z-index: 10; }
+  .modal.show { display: flex; }
+  .modal .box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; width: min(520px, 92vw); max-height: 86vh; overflow-y: auto; }
+  .modal h3 { margin: 0 0 8px; font-size: 16px; }
+  .modal .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .modal .notes { white-space: pre-wrap; font-size: 13px; max-height: 240px; overflow-y: auto; background: var(--bg); padding: 8px 10px; border-radius: 6px; user-select: text; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel2); cursor: pointer; white-space: nowrap; }
+  .btn.primary { background: var(--accent); color: #031520; border-color: var(--accent); font-weight: 600; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  a { color: var(--accent); cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SC Telemetry</h1>
+  <span class="ver" id="ver"></span>
+  <span id="conn" class="pill">starting…</span>
+  <span id="rate" class="pill">0 msg/s</span>
+  <span class="spacer"></span>
+  <button id="updatePill" class="pill update" style="display:none"></button>
+  <button class="iconbtn" id="settingsBtn" title="Settings">⚙ Settings</button>
+</header>
+
+<div id="banner" class="banner"></div>
+
+<div class="layout">
+  <main>
+    <section id="p-actor"><h2>Character</h2><div class="c"></div></section>
+    <section id="p-env"><h2>Environment</h2><div class="c"></div></section>
+    <section id="p-ship"><h2>Ship</h2><div class="c"></div></section>
+    <section id="p-flight"><h2>Flight</h2><div class="c"></div></section>
+    <section id="p-systems"><h2>Systems</h2><div class="c"></div></section>
+    <section id="p-ifcs"><h2>Flight assist</h2><div class="c"></div></section>
+    <section id="p-weapons"><h2>Weapons</h2><div class="c"></div></section>
+    <section id="p-ffb"><h2>Force feedback</h2><div class="c"></div></section>
+    <section id="p-events"><h2>Events <small id="evcount"></small></h2><ul class="log" id="events"><li class="empty">No events yet</li></ul></section>
+  </main>
+  <aside>
+    <h2>Controls</h2>
+    <div class="ctx" id="ctx"></div>
+    <input class="search" id="search" placeholder="Search all actions…">
+    <div id="groups"></div>
+  </aside>
+</div>
+
+<div id="toasts"></div>
+
+<div class="modal" id="updateModal"><div class="box" id="updateBox"></div></div>
+<div class="modal" id="settingsModal"><div class="box" id="settingsBox"></div></div>
+
+<script>
+// ================= state =================
+const STALE_MS = 1500;
+let state = {}, seen = {}, count = 0;
+let api = null, version = '', prefs = {}, game = { root: null, channels: [] }, connected = false, update = null, ALL = [];
+
+// ================= formatting + telemetry renderers =================
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const n = (v, d = 1) => Number(v ?? 0).toFixed(d);
+const en = (v, prefix) => v ? esc(String(v).replace(prefix, '').replace(/_/g, ' ').toLowerCase()) : '—';
+const kv = (k, v) => `<div class="kv"><span>${k}</span><span>${v}</span></div>`;
+const yes = b => b ? 'yes' : 'no';
+function gauge(label, g, unit = '', d = 0, highIsBad = false) {
+  const cur = g?.current ?? 0, max = g?.max || 0, pct = max ? Math.max(0, Math.min(100, cur / max * 100)) : 0;
+  const cls = highIsBad ? (pct > 85 ? 'crit' : pct > 65 ? 'low' : '') : (pct < 15 ? 'crit' : pct < 35 ? 'low' : '');
+  return `<div class="gauge ${cls}"><div class="lbl"><span>${label}</span><span>${n(cur, d)}${unit} / ${n(max, d)}${unit}</span></div><div class="bar"><i style="width:${pct}%"></i></div></div>`;
+}
+const led = (label, cls) => `<div class="led ${cls}">${label}</div>`;
+const panel = id => document.querySelector(`#p-${id} .c`);
+
+function renderActor(a) {
+  const v = a.vitals || {}, s = a.state || {}, e = a.environment || {};
+  panel('actor').innerHTML =
+    gauge('Health', v.health, '', 1) + gauge('Oxygen', v.oxygen, '', 2) + gauge('Hunger', v.hunger) + gauge('Thirst', v.thirst) +
+    kv('Body temp', n(v.body_temperature?.current, 1) + ' °C') + kv('Heart rate', n(v.heart_rate, 0) + ' bpm') +
+    kv('Intoxication', v.intoxication_level ?? 0) +
+    kv('State', en(s.locomotion, 'ACTOR_LOCOMOTION_STATE_')) + kv('Crew role', en(s.crew_role, 'ACTOR_CREW_ROLE_')) +
+    kv('Seat', esc(s.seat_name) || '—') +
+    `<div class="kv"><span>Balance</span><span class="big">${Number(s.uec_balance ?? 0).toLocaleString()} <span class="sub">aUEC</span></span></div>`;
+  panel('env').innerHTML =
+    kv('Outside temp', n(e.external_temperature, 1) + ' °C') + kv('Radiation', n(e.ambient_radiation_rate, 2)) +
+    kv('Breathable', yes(e.breathable_atmosphere)) + kv('Gravity', n(v.gravity, 2) + ' g') + kv('Pressure', n(v.pressure, 2));
+}
+function renderVehicle(st) {
+  const f = st.flight || {}, ins = f.instruments || {}, fs = f.state || {}, set = f.settings || {}, sh = st.shields, mm = st.master_mode, b = ins.boost || {};
+  panel('ship').innerHTML =
+    `<div class="big">${esc(st.name) || '—'}</div><div class="sub">${esc(st.manufacturer)} · ${esc(st.class_name)} · ${en(st.type, 'VEHICLE_TYPE_')}</div>` +
+    kv('Hull health', n(st.health, 2)) +
+    (sh ? kv('Shields', n(sh.level, 2)) + `<div class="faces">${(sh.faces || []).map(x => `<div title="${n(x, 2)}"><i style="height:${Math.max(0, Math.min(100, x * 100))}%"></i></div>`).join('')}</div>` : kv('Shields', '—')) +
+    kv('Master mode', mm ? en(mm.mode, 'VEHICLE_MASTER_MODE_') + (mm.spooled ? ' (spooled)' : '') : '—') +
+    kv('Lights', st.lights_enabled ? 'on' : 'off') +
+    kv('Doors', st.doors ? en(st.doors.open_state, 'DOOR_OPEN_STATE_') + ' / ' + en(st.doors.lock_state, 'DOOR_LOCK_STATE_') : '—');
+  panel('flight').innerHTML =
+    `<div class="kv"><span>Speed</span><span class="big">${n(ins.speed, 0)} <span class="sub">m/s</span></span></div>` +
+    kv('Heading', n(ins.heading, 0) + '°') + kv('Altitude', n(ins.altitude, 0) + ' m') + kv('Radar altitude', n(ins.radar_altitude, 0) + ' m') +
+    kv('Vertical speed', n(ins.vertical_speed_indicator, 1) + ' m/s') + kv('Atmos. density', n(ins.atmospheric_density, 3)) +
+    kv('Hydrogen fuel', n(ins.hydrogen_fuel, 2)) + kv('Quantum fuel', n(ins.quantum_fuel, 2)) +
+    (ins.g_meter ? gauge('G-meter', ins.g_meter, ' g', 1, true) : '') +
+    kv('Boost', `${b.engaged ? 'engaged' : 'off'} · out ${n(b.output, 2)} · res ${n(b.reserves, 2)}${b.critical ? ' · CRITICAL' : ''}`) +
+    kv('Landed', yes(fs.is_landed)) + kv('Gear', en(fs.gear, 'VEHICLE_COMPONENT_DEPLOYMENT_STATE_')) +
+    kv('VTOL', en(fs.vtol, 'VEHICLE_COMPONENT_DEPLOYMENT_STATE_')) + kv('Transform', en(fs.transformation, 'VEHICLE_COMPONENT_DEPLOYMENT_STATE_'));
+  const p = st.power || {}, an = st.annunciators || {};
+  const pw = [['powerplants', 'Power plant'], ['engines', 'Engines'], ['weapons', 'Weapons'], ['coolers', 'Coolers'], ['life_support', 'Life sup.'], ['gravity_generators', 'Grav gen'], ['sensors', 'Sensors'], ['shield_generators', 'Shield gen'], ['shield_emitters', 'Shield emit']];
+  panel('systems').innerHTML =
+    `<div class="sub">Power</div><div class="grid">${pw.map(([k, l]) => led(l, p[k] ? 'on' : '')).join('')}</div>` +
+    `<div class="sub" style="margin-top:10px">Warning lights</div><div class="grid">${['pwr', 'wpn', 'thr', 'shld', 'cool', 'qdrv', 'radr', 'prox', 'hit', 'misl'].map(k => led(k, String(an[k] || '').replace('ANNUNCIATOR_STATE_', ''))).join('')}</div>`;
+  const av = [['ifcs_coupled', 'Coupled'], ['ifcs_esp', 'ESP'], ['ifcs_gravity_compensation', 'Grav comp'], ['ifcs_g_safe', 'G-safe'], ['ifcs_cruise_mode', 'Cruise'], ['ifcs_speed_limiter', 'Speed lim.'], ['ifcs_proximity_assist', 'Prox assist'], ['ifcs_proximity_assist_landing', 'Prox landing'], ['ifcs_stability', 'Stability'], ['ifcs_core', 'Core'], ['ifcs_wind_compensation', 'Wind comp'], ['ifcs_command_behaviour', 'Command']];
+  const fl = [['advanced_hud_enabled_scm', 'Adv HUD SCM'], ['advanced_hud_enabled_nav', 'Adv HUD NAV'], ['advanced_hud_labels', 'HUD labels'], ['course_prediction', 'Course pred.'], ['flight_light_amplification', 'Light amp']];
+  panel('ifcs').innerHTML = `<div class="grid">${av.map(([k, l]) => led(l, set[k]?.active ? 'on' : '')).join('')}</div>` +
+    `<div class="grid" style="margin-top:8px">${fl.map(([k, l]) => led(l, set[k] ? 'on' : '')).join('')}</div>`;
+}
+function renderWeapons(w) {
+  panel('weapons').innerHTML = kv('Preset', `${w.preset_index ?? 0} · ${esc(w.preset_name) || '—'}`) +
+    ((w.weapons || []).length ? w.weapons.map(x => kv(esc(x.name), `${x.is_powered ? 'pwr' : 'off'} · ${x.ready_to_fire ? 'READY' : 'not ready'}`)).join('') : '<div class="empty">No weapons</div>') +
+    (w.countermeasures || []).map(c => kv('CM ' + en(c.type, 'COUNTERMEASURE_TYPE_'), c.amount ?? 0)).join('');
+}
+function renderFfb(f) {
+  const ax = (o, name) => ['x', 'y', 'z'].map(k => kv(`${name} ${k} res / damp`, `${n(o?.[k]?.resistance, 2)} / ${n(o?.[k]?.damping, 2)}`)).join('');
+  panel('ffb').innerHTML = ax(f.angular, 'Angular') + ax(f.linear, 'Linear') + kv('Gunfire', n(f.gunfire, 2)) + kv('Stick shaker', n(f.stick_shaker, 2));
+}
+const SECTIONS = { actor: ['actor', 'env'], vehicle: ['ship', 'flight', 'systems', 'ifcs'], weapons: ['weapons'], force_feedback: ['ffb'] };
+function renderTelemetry() {
+  const now = Date.now();
+  for (const [k, ids] of Object.entries(SECTIONS)) {
+    const stale = !seen[k] || now - seen[k] > STALE_MS;
+    ids.forEach(id => { document.getElementById('p-' + id).classList.toggle('stale', stale); if (!state[k]) panel(id).innerHTML = '<div class="empty">No data</div>'; });
+  }
+  if (state.actor) renderActor(state.actor);
+  if (state.vehicle) renderVehicle(state.vehicle.state || {});
+  if (state.weapons) renderWeapons(state.weapons);
+  if (state.force_feedback) renderFfb(state.force_feedback);
+}
+function addEvent(type) {
+  const ul = document.getElementById('events');
+  if (ul.querySelector('.empty')) ul.innerHTML = '';
+  const li = document.createElement('li');
+  li.innerHTML = `<span>${new Date().toLocaleTimeString()}</span>${en(type, 'GAME_EVENT_TYPE_')}`;
+  ul.prepend(li);
+  while (ul.children.length > 100) ul.lastChild.remove();
+  document.getElementById('evcount').textContent = ul.children.length + ' shown';
+}
+
+// ================= controls =================
+const EMOTES = ['agree', 'angry', 'atease', 'attention', 'blah', 'bored', 'bow', 'burp', 'cheer', 'chicken', 'clap', 'come', 'cry', 'dance', 'disagree', 'failure', 'flex', 'flirt', 'gasp', 'gloat', 'greet', 'laugh', 'launch', 'point', 'rude', 'salute', 'sit', 'sleep', 'smell', 'taunt', 'threaten', 'wait', 'wave', 'whistle'];
+const DANGER = new Set(['v_eject', 'v_emergency_exit', 'v_self_destruct']);
+// [action, label, state key (lights the button), behaviour]
+const GROUPS = [
+  { name: 'Player', items: [['mobiglas', 'mobiGlas'], ['toggle_flashlight', 'Flashlight'], ['v_starmap', 'Starmap'], ['visor_wipe', 'Visor wipe']] },
+  { name: 'Ship', ship: true, items: [['v_flightready', 'Flight ready'], ['v_lights', 'Lights', 'lights'], ['v_open_all_doors', 'Open doors'], ['v_close_all_doors', 'Close doors'], ['v_lock_all_doors', 'Lock doors'], ['v_unlock_all_doors', 'Unlock doors'], ['v_lock_all_ports', 'Lock ports'], ['v_unlock_all_ports', 'Unlock ports']] },
+  { name: 'Power', ship: true, items: [['v_power_toggle', 'Ship power', 'pp'], ['v_power_toggle_thrusters', 'Thrusters', 'eng'], ['v_power_toggle_shields', 'Shields', 'shd'], ['v_power_toggle_weapons', 'Weapons', 'wpn']] },
+  { name: 'Flight', ship: true, items: [['v_toggle_landing_system', 'Landing gear', 'gear'], ['v_vtol_toggle', 'VTOL', 'vtol'], ['v_ifcs_vector_decoupling_toggle', 'Decoupled', 'decoupled'], ['v_ifcs_toggle_gforce_safety', 'G-safe', 'gsafe'], ['v_ifcs_proximity_assist_toggle', 'Prox assist', 'prox'], ['v_ifcs_toggle_esp', 'ESP', 'esp'], ['v_flight_advanced_hud_toggle', 'Adv. HUD', 'advhud'], ['v_transform_cycle', 'Transform'], ['v_ifcs_reset_gmeter_max', 'Reset G max']] },
+  { name: 'Modes', ship: true, items: [['v_master_mode_set_nav', 'NAV', 'nav'], ['v_master_mode_set_scm', 'SCM', 'scm'], ['v_set_flight_mode', 'Flight'], ['v_set_guns_mode', 'Guns'], ['v_set_quantum_mode', 'Quantum'], ['v_set_scan_mode', 'Scan'], ['v_set_mining_mode', 'Mining'], ['v_set_salvage_mode', 'Salvage'], ['v_set_refuel_mode', 'Refuel'], ['v_operator_mode_cycle_back', '◀ Op mode'], ['v_operator_mode_cycle_forward', 'Op mode ▶']] },
+  { name: 'Navigation & comms', ship: true, items: [['v_toggle_qdrive_engagement', 'Quantum drive'], ['v_invoke_ping', 'Radar ping', null, 'hold'], ['v_atc_request', 'ATC request'], ['v_toggle_docking_request', 'Docking'], ['v_target_hail', 'Hail target']], hint: 'Radar ping: hold the button to hold the ping.' },
+  { name: 'Seat', ship: true, items: [['v_light_amplification_toggle', 'Light amp', 'lightamp'], ['v_enter_remote_turret_1', 'Turret 1'], ['v_enter_remote_turret_2', 'Turret 2'], ['v_enter_remote_turret_3', 'Turret 3']] },
+  { name: 'Emotes', small: true, closed: true, items: EMOTES.map(e => ['emote_' + e, e]) },
+  { name: 'Danger zone', ship: true, danger: true, items: [['v_eject', 'Eject', null, 'confirm'], ['v_emergency_exit', 'Emerg. exit', null, 'confirm'], ['v_self_destruct', 'Self-destruct', null, 'confirm']], hint: 'Hold for 1.5 s to send (can be turned off in Settings).' },
+];
+
+function stateOf(key) {
+  const st = state.vehicle?.state; if (!st) return false;
+  const set = st.flight?.settings || {}, p = st.power || {}, fs = st.flight?.state || {};
+  return {
+    lights: st.lights_enabled, pp: p.powerplants, eng: p.engines, shd: p.shield_generators, wpn: p.weapons,
+    gear: fs.gear === 'VEHICLE_COMPONENT_DEPLOYMENT_STATE_DEPLOYED', vtol: fs.vtol === 'VEHICLE_COMPONENT_DEPLOYMENT_STATE_DEPLOYED',
+    decoupled: !set.ifcs_coupled?.active, gsafe: set.ifcs_g_safe?.active, prox: set.ifcs_proximity_assist?.active, esp: set.ifcs_esp?.active,
+    advhud: set.advanced_hud_enabled_scm, nav: st.master_mode?.mode === 'VEHICLE_MASTER_MODE_NAVIGATION', scm: st.master_mode?.mode === 'VEHICLE_MASTER_MODE_SCM',
+    lightamp: set.flight_light_amplification,
+  }[key];
+}
+const button = ([action, label, key, kind], danger) =>
+  `<button class="act${danger ? ' danger' : ''}" data-action="${esc(action)}" data-key="${key || ''}" data-kind="${kind || ''}"><span class="fill"></span><span class="lbl">${esc(label)}</span></button>`;
+
+function buildControls() {
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const el = document.getElementById('groups');
+  document.getElementById('search').placeholder = ALL.length ? `Search all ${ALL.length} actions…` : 'Search actions (game not connected)';
+  if (q) {
+    const hits = ALL.filter(a => a.action_name.includes(q) || (a.category || '').includes(q));
+    el.innerHTML = `<details open><summary>Search results <small>${hits.length}</small></summary><div class="btns">${hits.map(a =>
+      button([a.action_name, a.action_name.replace(/^v_|^emote_/, '').replace(/_/g, ' '), null, DANGER.has(a.action_name) ? 'confirm' : (a.holdable ? 'hold' : '')], DANGER.has(a.action_name))).join('')}</div></details>`;
+  } else {
+    el.innerHTML = GROUPS.map((g, i) => `<details data-group="${i}" ${g.closed ? '' : 'open'} class="${g.danger ? 'danger' : ''}"><summary>${g.name} <small>${g.ship ? 'in ship' : 'always'}</small></summary><div class="btns ${g.small ? 'small' : ''}">${g.items.map(it => button(it, g.danger)).join('')}</div>${g.hint ? `<div class="hint">${g.hint}</div>` : ''}</details>`).join('');
+  }
+  refreshControls();
+}
+function refreshControls() {
+  const inShip = state.actor?.state?.locomotion === 'ACTOR_LOCOMOTION_STATE_SEATED' && !!state.vehicle;
+  document.querySelectorAll('#groups details[data-group]').forEach(d => {
+    const g = GROUPS[d.dataset.group], inactive = !connected || (g.ship && !inShip);
+    d.classList.toggle('inactive', inactive);
+    d.querySelectorAll('.act').forEach(b => { b.disabled = !connected; b.title = !connected ? 'Game not connected' : (inactive ? 'Usually only works while seated in a ship' : b.dataset.action); });
+  });
+  if (!connected) document.querySelectorAll('#groups .act').forEach(b => { b.disabled = true; });
+  document.querySelectorAll('#groups .act[data-key]').forEach(b => b.classList.toggle('active', !!(b.dataset.key && stateOf(b.dataset.key))));
+  document.getElementById('ctx').innerHTML = !connected ? 'Game not connected: controls are disabled.' :
+    inShip ? `Seated as <b>${en(state.actor.state.crew_role, 'ACTOR_CREW_ROLE_')}</b> in <b>${esc(state.vehicle.state.name)}</b>. Lit buttons show what is on.` :
+    'On foot: ship controls are dimmed (the game may refuse them).';
+}
+
+function toast(text, cls = '') {
+  const t = document.createElement('div'); t.className = 'toast ' + cls; t.textContent = text;
+  document.getElementById('toasts').append(t); setTimeout(() => t.remove(), 3500);
+}
+async function send(action, holdMs) {
+  if (!api) return;
+  const r = await api.trigger(action, holdMs ?? null);
+  toast(`${action}${holdMs ? ` (${holdMs} ms)` : ''} → ${r.status}${r.message ? ': ' + r.message : ''}`, r.status === 'OK' ? '' : 'warn');
+}
+
+// press handling: click, hold (radar ping), hold-to-confirm (danger)
+let press = null;
+document.addEventListener('pointerdown', e => {
+  const b = e.target.closest('.act'); if (!b || b.disabled) return;
+  const kind = b.dataset.kind === 'confirm' && !prefs.confirm_danger ? '' : b.dataset.kind;
+  press = { b, t0: Date.now(), kind };
+  if (kind === 'confirm') {
+    const fill = b.querySelector('.fill'); fill.style.transition = 'width 1.5s linear'; fill.style.width = '100%';
+    press.timer = setTimeout(() => { press.timer = null; send(b.dataset.action); endPress(); }, 1500);
+  }
+});
+document.addEventListener('pointerup', () => {
+  if (!press) return;
+  if (press.kind === 'confirm') { if (press.timer) toast('Hold the button for 1.5 s to send', 'warn'); }
+  else if (press.kind === 'hold') { const ms = Date.now() - press.t0; send(press.b.dataset.action, ms > 250 ? ms : undefined); }
+  else send(press.b.dataset.action);
+  endPress();
+});
+function endPress() { if (!press) return; clearTimeout(press.timer); const f = press.b.querySelector('.fill'); f.style.transition = 'none'; f.style.width = '0'; press = null; }
+
+// ================= header, banner, dialogs =================
+function connState() {
+  if (connected) return 'ok';
+  if (!game.root) return 'nogame';
+  if (game.channels.length && !game.channels.some(c => c.enabled)) return 'disabled';
+  return 'waiting';
+}
+function renderChrome() {
+  document.getElementById('ver').textContent = version ? 'v' + version : '';
+  const cs = connState(), conn = document.getElementById('conn'), banner = document.getElementById('banner');
+  const c = { ok: ['game connected', 'on'], waiting: ['waiting for game', 'wait'], disabled: ['telemetry off', 'offline'], nogame: ['game not found', 'offline'] }[cs];
+  conn.textContent = c[0]; conn.className = 'pill ' + c[1];
+  banner.className = 'banner';
+  const on = game.channels.filter(ch => ch.enabled).map(ch => ch.channel);
+  if (cs === 'waiting') {
+    banner.className = 'banner info show';
+    banner.innerHTML = `<div class="msg">Waiting for Star Citizen. Telemetry is enabled for ${esc(on.join(', '))}. If the game was already running when it was enabled, restart the game.</div>`;
+  } else if (cs === 'disabled') {
+    banner.className = 'banner warn show';
+    banner.innerHTML = `<div class="msg">Telemetry is not enabled. This adds <code>server.game.telemetry.enabled = 1</code> to the game's <code>user.cfg</code> (a backup is kept); restart Star Citizen afterwards.</div>` +
+      game.channels.map((ch, i) => `<button class="btn ${i ? '' : 'primary'}" data-enable="${esc(ch.channel)}">Enable for ${esc(ch.channel)}</button>`).join('');
+  } else if (cs === 'nogame') {
+    banner.className = 'banner warn show';
+    banner.innerHTML = '<div class="msg">Star Citizen folder not found. Choose the <code>StarCitizen</code> folder that contains LIVE or PTU.</div><button class="btn primary" data-pick>Choose folder</button>';
+  }
+  const pill = document.getElementById('updatePill');
+  pill.style.display = update?.available ? '' : 'none';
+  if (update?.available) pill.textContent = `Update ${update.latest} available`;
+}
+function renderSettings() {
+  document.getElementById('settingsBox').innerHTML = `<h3>Settings</h3>
+    <div class="row"><span>Game folder<br><span class="sub">${esc(game.root || 'not found')}</span></span><button class="btn" data-pick>Change</button></div>
+    ${game.channels.map(ch => `<div class="row"><span>Telemetry for ${esc(ch.channel)}</span>${ch.enabled ? '<span class="pill on">enabled</span>' : `<button class="btn" data-enable="${esc(ch.channel)}">Enable</button>`}</div>`).join('')}
+    <div class="row"><span>Confirm dangerous actions (hold 1.5 s)</span><input type="checkbox" data-pref="confirm_danger" ${prefs.confirm_danger ? 'checked' : ''}></div>
+    <div class="row"><span>Keep window on top</span><input type="checkbox" data-pref="on_top" ${prefs.on_top ? 'checked' : ''}></div>
+    <div class="row"><span>Check for updates at start</span><input type="checkbox" data-pref="check_updates" ${prefs.check_updates ? 'checked' : ''}></div>
+    <div class="row"><span>Version ${esc(version)}</span><a data-check>Check for updates</a></div>
+    <div class="actions"><button class="btn primary" data-close>Close</button></div>`;
+}
+function renderUpdate(progress) {
+  const u = update || {};
+  document.getElementById('updateBox').innerHTML = `<h3>SC Telemetry ${esc(u.latest)} is available</h3>
+    <div class="sub">You have ${esc(version)}. Published ${esc(u.published)}.</div>
+    <p class="notes">${esc((u.notes || '').trim() || 'No release notes.')}</p>
+    <div class="sub">${progress == null ? 'The installer is downloaded and checked, then it replaces this version and starts it again.' : `Downloading… ${Math.round(progress * 100)}%`}</div>
+    <div class="actions"><button class="btn" data-release>Release page</button><button class="btn" data-close>Later</button><button class="btn primary" data-install ${progress != null ? 'disabled' : ''}>Install update</button></div>`;
+}
+const show = id => document.getElementById(id).classList.add('show');
+
+document.addEventListener('click', async e => {
+  const t = e.target;
+  if (t.closest('#updatePill')) { renderUpdate(); show('updateModal'); }
+  if (t.closest('#settingsBtn')) { renderSettings(); show('settingsModal'); }
+  if (t.closest('[data-close]')) t.closest('.modal').classList.remove('show');
+  const en_ = t.closest('[data-enable]');
+  if (en_ && api) {
+    const r = await api.enable_telemetry(en_.dataset.enable); game = r.game;
+    toast(r.ok ? `Telemetry enabled for ${en_.dataset.enable}: restart Star Citizen` : r.error, r.ok ? '' : 'bad');
+    renderChrome(); renderSettings();
+  }
+  if (t.closest('[data-pick]') && api) {
+    const r = await api.pick_game_folder(); game = r.game;
+    if (r.error) toast(r.error, 'bad');
+    renderChrome(); renderSettings();
+  }
+  if (t.closest('[data-check]') && api) {
+    toast('Checking for updates…');
+    update = await api.check_update(); renderChrome();
+    if (update.error) toast('Update check failed: ' + update.error, 'bad');
+    else if (update.available) { renderUpdate(); show('updateModal'); }
+    else toast(`You have the latest version (${version})`);
+  }
+  if (t.closest('[data-install]') && api) {
+    renderUpdate(0);
+    const r = await api.install_update();
+    if (!r.ok) { toast(r.error, 'bad'); renderUpdate(); }
+  }
+  if (t.closest('[data-release]') && api) api.open_release_page();
+});
+document.addEventListener('change', e => {
+  const k = e.target.dataset.pref; if (!k || !api) return;
+  prefs[k] = e.target.checked; api.set_setting(k, e.target.checked);
+});
+document.getElementById('search').addEventListener('input', buildControls);
+
+// ================= calls from Python (app/main.py) =================
+window.onFrame = f => {
+  count++;
+  const now = Date.now();
+  for (const k of Object.keys(f)) { if (k === 'events') continue; state[k] = f[k]; seen[k] = now; }
+  (f.events?.events || []).forEach(ev => addEvent(ev.type));
+  // ship data stops when leaving the seat: forget it so ship buttons dim
+  if (f.actor && f.actor.state?.locomotion !== 'ACTOR_LOCOMOTION_STATE_SEATED' && seen.vehicle && now - seen.vehicle > STALE_MS) { delete state.vehicle; delete state.weapons; delete state.force_feedback; }
+};
+window.onStatus = async s => {
+  connected = s.connected;
+  if (!connected) { state = {}; seen = {}; }
+  if (api) {
+    game = await api.game_info();
+    if (connected && !ALL.length) { ALL = await api.list_actions(); buildControls(); }
+  }
+  renderChrome(); refreshControls();
+};
+window.onUpdate = info => { update = info; renderChrome(); };
+window.onUpdateProgress = p => renderUpdate(p);
+
+window.addEventListener('pywebviewready', async () => {
+  api = window.pywebview.api;
+  const init = await api.get_init();
+  version = init.version; prefs = init.settings; game = init.game; ALL = init.actions || [];
+  renderChrome(); buildControls();
+  api.ready();
+});
+
+let last = 0;
+(function loop(ts) { if (ts - last > 100) { last = ts; renderTelemetry(); refreshControls(); } requestAnimationFrame(loop); })(0);
+setInterval(() => { document.getElementById('rate').textContent = count + ' msg/s'; count = 0; }, 1000);
+renderChrome(); buildControls();
+</script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+# Python packages:  pip install -r requirements.txt
+pywebview       # the window (Edge WebView2, included in Windows 11)
+grpcio          # talks to the game's telemetry API
+protobuf        # message types from proto/*.desc
+pyinstaller     # build.ps1: packs the program
+pytest          # build.ps1: runs tests/ first

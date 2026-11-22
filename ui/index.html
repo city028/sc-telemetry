@@ -285,7 +285,7 @@ function buildControls() {
 function refreshControls() {
   const inShip = state.actor?.state?.locomotion === 'ACTOR_LOCOMOTION_STATE_SEATED' && !!state.vehicle;
   document.querySelectorAll('#groups details[data-group]').forEach(d => {
-    const g = GROUPS[d.dataset.group], inactive = !connected || (g.ship && !inShip);
+    const g = GROUPS[d.dataset.group], inactive = !connected || (!!g.ship && !inShip);
     d.classList.toggle('inactive', inactive);
     d.querySelectorAll('.act').forEach(b => { b.disabled = !connected; b.title = !connected ? 'Game not connected' : (inactive ? 'Usually only works while seated in a ship' : b.dataset.action); });
   });
